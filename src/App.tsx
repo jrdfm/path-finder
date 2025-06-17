@@ -1,8 +1,8 @@
 import { useEffect, useState, useRef } from 'react'
 import { generateMaze } from './game/mazeGenerator'
 import { solve } from './game/solver'
-import type { Pos, Algorithm } from './game/solver'
-import './App.css'
+import type { Pos, Algorithm, Solution } from './game/solver'
+import Maze2D from './components/Maze2D'
 import MazeThree from './components/MazeThree'
 
 const DIR_KEY: Record<string, Pos> = {
@@ -29,6 +29,10 @@ function App() {
   const [showOptimalPath, setShowOptimalPath] = useState(false)
   const [algorithmLogs, setAlgorithmLogs] = useState<string[]>([])
   const [showAStarScores, setShowAStarScores] = useState(false)
+  const [isStepMode, setIsStepMode] = useState(false)
+  const [currentStep, setCurrentStep] = useState(0)
+  const [isPaused, setIsPaused] = useState(false)
+  const [viewMode, setViewMode] = useState<'2D' | '3D'>('2D')
 
   // Recalculate solution when level or algorithm changes
   const [solution, setSolution] = useState(() => solve(currentLevel, algorithm))
@@ -86,6 +90,7 @@ function App() {
     if (isVisualizing) {
       visualizationCancelledRef.current = true
       setIsVisualizing(false)
+      setIsPaused(false)
       addLog(`⏹️ Visualization stopped by user`)
       return
     }
@@ -94,6 +99,7 @@ function App() {
     visualizationCancelledRef.current = false
     setVisualizedCells([])
     setShowOptimalPath(false)
+    setCurrentStep(0)
     
     addLog(`🚀 Starting ${solution.algorithm} algorithm`)
     addLog(`📍 Starting position: (${currentLevel.start.r}, ${currentLevel.start.c})`)
@@ -110,14 +116,14 @@ function App() {
     } else if (solution.algorithm === 'Dijkstra') {
       addLog(`ℹ️ Dijkstra finds shortest path with distance tracking`)
     }
+
+    if (isStepMode) {
+      setIsPaused(true)
+      setCurrentStep(1) // Show the first step
+      return // Let user control the rest
+    }
     
-    // Animate visited cells one by one
-    let quarterMarks = [
-      Math.floor(solution.visitedCells.length * 0.25),
-      Math.floor(solution.visitedCells.length * 0.5),
-      Math.floor(solution.visitedCells.length * 0.75)
-    ]
-    
+    // Animate visited cells one by one for non-step mode
     for (let i = 0; i < solution.visitedCells.length; i++) {
       // Check if visualization was cancelled
       if (visualizationCancelledRef.current) {
@@ -127,46 +133,8 @@ function App() {
       }
       
       await new Promise(resolve => setTimeout(resolve, 25)) // 25ms delay between steps
-      setVisualizedCells(solution.visitedCells.slice(0, i + 1))
-      
-      const cell = solution.visitedCells[i]
-      const detailedStep = solution.detailedSteps?.[i]
-      
-      if (i === 0) {
-        addLog(`🔍 Starting at (${cell.r}, ${cell.c})`)
-      } else if (quarterMarks.includes(i)) {
-        const percentage = Math.round(((i + 1) / solution.visitedCells.length) * 100)
-        addLog(`📈 Progress: ${percentage}% complete (${i + 1}/${solution.visitedCells.length} cells)`)
-      } else if (i % 15 === 0 && i > 0 && detailedStep) { // Log every 15th cell with algorithm details
-        const data = detailedStep.algorithmData
-        
-        if (solution.algorithm === 'BFS') {
-          addLog(`🔍 BFS: Queue=${data.queueSize}, Level=${data.currentLevel}, Exploring (${cell.r},${cell.c}), +${data.neighborsAdded} neighbors`)
-        } else if (solution.algorithm === 'DFS') {
-          const backtrack = data.isBacktracking ? ' [BACKTRACK]' : ''
-          const deadEnd = data.deadEnd ? ' [DEAD END]' : ''
-          addLog(`🌊 DFS: Depth=${data.stackDepth}, Exploring (${cell.r},${cell.c})${backtrack}${deadEnd}`)
-        } else if (solution.algorithm === 'A*') {
-          addLog(`⭐ A*: f=${data.fScore} (g=${data.gScore}+h=${data.hScore}), Open=${data.openSetSize}, Exploring (${cell.r},${cell.c})`)
-        } else if (solution.algorithm === 'Dijkstra') {
-          addLog(`📏 Dijkstra: dist=${data.currentDistance}, Queue=${data.priorityQueueSize}, Relaxed=${data.relaxationCount}, Exploring (${cell.r},${cell.c})`)
-        }
-      }
+      setCurrentStep(i + 1)
     }
-    
-    addLog(`✅ Algorithm completed! Explored ${solution.visitedCells.length} cells`)
-    addLog(`📏 Optimal path length: ${solution.distance} steps`)
-    
-    // Calculate efficiency metric
-    const totalCells = currentLevel.grid.length * currentLevel.grid[0].length
-    const explorationPercentage = Math.round((solution.visitedCells.length / totalCells) * 100)
-    addLog(`📊 Explored ${explorationPercentage}% of maze (${solution.visitedCells.length}/${totalCells} cells)`)
-    
-    // Show the optimal path after exploration is complete
-    await new Promise(resolve => setTimeout(resolve, 500))
-    setShowOptimalPath(true)
-    setIsVisualizing(false)
-    addLog(`🎉 Visualization complete!`)
   }
 
   // Reset visualization
@@ -176,6 +144,8 @@ function App() {
     setShowOptimalPath(false)
     setIsVisualizing(false)
     setAlgorithmLogs([])
+    setCurrentStep(0)
+    setIsPaused(false)
     setTimeout(() => {
       addLog(`🔄 Visualization reset - Ready for new algorithm run`)
       visualizationCancelledRef.current = false
@@ -249,73 +219,171 @@ function App() {
       // Fallback: any border cell is an exit
       return (
         player.r === 0 ||
-        player.c === 0 ||
         player.r === currentLevel.grid.length - 1 ||
+        player.c === 0 ||
         player.c === currentLevel.grid[0].length - 1
-      )
+      ) && currentLevel.grid[player.r][player.c] === 0
     }
   })()
 
-  return (
-    <div style={{ fontFamily: 'monospace', padding: '1rem' }}>
-      <h2>Maze Path-Finder</h2>
-      
-      {/* Main game layout with maze on left and options on right */}
-      <div style={{ display: 'flex', gap: '2rem', alignItems: 'flex-start', maxWidth: '100%' }}>
-        {/* Maze section */}
-        <div style={{ flex: '1 1 auto', minWidth: '0' }}>
-          <MazeThree 
-            level={currentLevel} 
-            player={player} 
-            visualizedCells={visualizedCells}
-            optimalPath={showOptimalPath ? solution?.path : undefined}
-            aStarScores={solution?.aStarScores}
-            showAStarScores={showAStarScores && solution?.algorithm === 'A*'}
-          />
-          <p>Use arrow keys to move the red dot. Black squares are walls.</p>
-        </div>
+  const handleStepChange = (delta: number) => {
+    if (!solution?.visitedCells) return
+    const visitedCells = solution.visitedCells
+    setCurrentStep(prev => {
+      const newStep = prev + delta
+      if (newStep < 0) return 0
+      if (newStep >= visitedCells.length) return prev
+      return newStep
+    })
+  }
+
+  const handlePauseToggle = () => {
+    setIsPaused(prev => !prev)
+  }
+
+  const logStep = (stepIndex: number) => {
+    if (!solution?.visitedCells || !solution.detailedSteps || stepIndex < 0 || stepIndex >= solution.visitedCells.length) {
+        return;
+    }
+
+    const cell = solution.visitedCells[stepIndex];
+    const detailedStep = solution.detailedSteps?.[stepIndex];
+    const i = stepIndex;
+
+    const quarterMarks = [
+        Math.floor(solution.visitedCells.length * 0.25),
+        Math.floor(solution.visitedCells.length * 0.5),
+        Math.floor(solution.visitedCells.length * 0.75)
+    ];
+
+    if (i === 0) {
+        addLog(`🔍 Starting at (${cell.r}, ${cell.c})`);
+    } else if (quarterMarks.includes(i)) {
+        const percentage = Math.round(((i + 1) / solution.visitedCells.length) * 100);
+        addLog(`📈 Progress: ${percentage}% complete (${i + 1}/${solution.visitedCells.length} cells)`);
+    } else if (i > 0 && i % 15 === 0 && detailedStep) {
+        const data = detailedStep.algorithmData;
         
-        {/* Right side panel with options and log */}
-        <div style={{ 
-          display: 'flex', 
-          flexDirection: 'column', 
-          gap: '1rem',
-          flex: '0 0 auto',
-          width: Math.max(250, Math.min(320, mazeSize * 12)) + 'px'
-        }}>
-          {/* Options Menu */}
-          <div style={{ 
-            padding: '1.5rem', 
-            backgroundColor: '#2c3e50',
-            color: 'white',
-            borderRadius: '8px',
-            width: Math.max(250, Math.min(320, mazeSize * 12)) + 'px',
-            boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
-          }}>
-            <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.2rem', color: '#ecf0f1' }}>Game Options</h3>
-            
+        if (solution.algorithm === 'BFS') {
+          addLog(`🔍 BFS: Queue=${data.queueSize}, Level=${data.currentLevel}, Exploring (${cell.r},${cell.c}), +${data.neighborsAdded} neighbors`)
+        } else if (solution.algorithm === 'DFS') {
+          const backtrack = data.isBacktracking ? ' [BACKTRACK]' : ''
+          const deadEnd = data.deadEnd ? ' [DEAD END]' : ''
+          addLog(`🌊 DFS: Depth=${data.stackDepth}, Exploring (${cell.r},${cell.c})${backtrack}${deadEnd}`)
+        } else if (solution.algorithm === 'A*') {
+          addLog(`⭐ A*: f=${data.fScore} (g=${data.gScore}+h=${data.hScore}), Open=${data.openSetSize}, Exploring (${cell.r},${cell.c})`)
+        } else if (solution.algorithm === 'Dijkstra') {
+          addLog(`📏 Dijkstra: dist=${data.currentDistance}, Queue=${data.priorityQueueSize}, Relaxed=${data.relaxationCount}, Exploring (${cell.r},${cell.c})`)
+        }
+    }
+
+    if (stepIndex === solution.visitedCells.length - 1) {
+        addLog(`✅ Algorithm completed! Explored ${solution.visitedCells.length} cells`);
+        addLog(`📏 Optimal path length: ${solution.distance} steps`);
+        const totalCells = currentLevel.grid.length * currentLevel.grid[0].length;
+        const explorationPercentage = Math.round((solution.visitedCells.length / totalCells) * 100);
+        addLog(`📊 Explored ${explorationPercentage}% of maze (${solution.visitedCells.length}/${totalCells} cells)`);
+        
+        setTimeout(() => {
+            if (!visualizationCancelledRef.current) {
+                setShowOptimalPath(true);
+                addLog(`🎉 Visualization complete!`);
+            }
+            setIsVisualizing(false)
+            setIsPaused(true)
+        }, 500);
+    }
+  }
+
+  useEffect(() => {
+    if (!isVisualizing || !solution?.visitedCells) return;
+    
+    if(currentStep > 0 && currentStep <= solution.visitedCells.length) {
+        setVisualizedCells(solution.visitedCells.slice(0, currentStep));
+        logStep(currentStep - 1);
+    } else if (currentStep === 0) {
+        setVisualizedCells([]);
+    }
+  }, [currentStep, isVisualizing, solution]);
+
+  useEffect(() => {
+      if (isStepMode && isVisualizing && !isPaused) {
+          if (solution?.visitedCells && currentStep >= solution.visitedCells.length) {
+              setIsPaused(true);
+              return;
+          }
+
+          const interval = setInterval(() => {
+              handleStepChange(1);
+          }, 25);
+
+          return () => clearInterval(interval);
+      }
+  }, [isStepMode, isVisualizing, isPaused, currentStep, solution]);
+
+  return (
+    <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif', backgroundColor: '#111827', color: 'white' }}>
+      {/* Left Panel: Maze Visualization */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '1rem' }}>
+        <h1 style={{ fontSize: '1.875rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>Maze Path-Finder</h1>
+        <p style={{ marginBottom: '1rem', color: '#9CA3AF' }}>
+          Use arrow keys to move the red dot. In 3D mode, use the mouse to rotate the camera.
+        </p>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #374151', borderRadius: '0.5rem', backgroundColor: 'rgba(55, 65, 81, 0.2)' }}>
+          {viewMode === '2D' ? (
+            <Maze2D
+              level={currentLevel}
+              player={player}
+              visualizedCells={visualizedCells}
+              optimalPath={showOptimalPath ? solution?.path : undefined}
+              aStarScores={solution?.aStarScores}
+              showAStarScores={showAStarScores}
+            />
+          ) : (
+            <MazeThree
+              level={currentLevel}
+              player={player}
+              visualizedCells={visualizedCells}
+              optimalPath={showOptimalPath ? solution?.path : []}
+            />
+          )}
+        </div>
+        <div style={{ marginTop: '1rem', textAlign: 'center' }}>
+          <p>
+            Algorithm: {solution?.algorithm} | Optimal distance: {solution?.distance} | Your moves: {moves}
+          </p>
+          <p>Cells explored by {solution?.algorithm}: {solution?.visitedCells?.length}</p>
+        </div>
+      </div>
+
+      {/* Right Panel: Controls and Logs */}
+      <div style={{ width: '24rem', display: 'flex', flexDirection: 'column', backgroundColor: '#1F2937', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)', overflowY: 'auto' }}>
+        <div style={{ padding: '1.5rem' }}>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1rem' }}>Game Options</h2>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div>
-                <label htmlFor="maze-size" style={{ 
-                  display: 'block', 
-                  marginBottom: '0.5rem',
-                  color: '#bdc3c7',
-                  fontSize: '0.9rem'
-                }}>
-                  Maze Size:
+                <label htmlFor="viewMode" style={{ display: 'block', fontSize: '0.875rem', fontWeight: '500', marginBottom: '0.25rem' }}>
+                  View Mode
                 </label>
-                <select 
-                  id="maze-size"
-                  value={mazeSize} 
+                <select
+                  id="viewMode"
+                  value={viewMode}
+                  onChange={(e) => setViewMode(e.target.value as '2D' | '3D')}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', backgroundColor: '#374151', border: '1px solid #4B5563', color: 'white' }}
+                >
+                  <option value="2D">2D</option>
+                  <option value="3D">3D</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="mazeSize" style={{ display: 'block', fontSize: '0.875rem', fontWeight: '500', marginBottom: '0.25rem' }}>
+                  Maze Size
+                </label>
+                <select
+                  id="mazeSize"
+                  value={mazeSize}
                   onChange={(e) => setMazeSize(Number(e.target.value))}
-                  style={{ 
-                    padding: '0.5rem', 
-                    width: '100%',
-                    borderRadius: '4px',
-                    border: '1px solid #34495e',
-                    backgroundColor: '#34495e',
-                    color: 'white'
-                  }}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', backgroundColor: '#374151', border: '1px solid #4B5563', color: 'white' }}
                 >
                   <option value={9}>Tiny (9×9)</option>
                   <option value={11}>Small (11×11)</option>
@@ -325,264 +393,177 @@ function App() {
                   <option value={21}>Large (21×21)</option>
                 </select>
               </div>
-              
               <div>
-                <label htmlFor="difficulty" style={{ 
-                  display: 'block', 
-                  marginBottom: '0.5rem',
-                  color: '#bdc3c7',
-                  fontSize: '0.9rem'
-                }}>
-                  Difficulty:
+                <label htmlFor="difficulty" style={{ display: 'block', fontSize: '0.875rem', fontWeight: '500', marginBottom: '0.25rem' }}>
+                  Difficulty
                 </label>
-                <select 
+                <select
                   id="difficulty"
-                  value={difficulty} 
+                  value={difficulty}
                   onChange={(e) => setDifficulty(e.target.value as 'easy' | 'normal' | 'hard')}
-                  style={{ 
-                    padding: '0.5rem', 
-                    width: '100%',
-                    borderRadius: '4px',
-                    border: '1px solid #34495e',
-                    backgroundColor: '#34495e',
-                    color: 'white'
-                  }}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', backgroundColor: '#374151', border: '1px solid #4B5563', color: 'white' }}
                 >
-                  <option value="easy">Easy (More direct paths)</option>
+                  <option value="easy">Easy</option>
                   <option value="normal">Normal</option>
-                  <option value="hard">Hard (More complex)</option>
+                  <option value="hard">Hard</option>
                 </select>
               </div>
-              
               <div>
-                <label htmlFor="algorithm" style={{ 
-                  display: 'block', 
-                  marginBottom: '0.5rem',
-                  color: '#bdc3c7',
-                  fontSize: '0.9rem'
-                }}>
-                  Pathfinding Algorithm:
+                <label htmlFor="algorithm" style={{ display: 'block', fontSize: '0.875rem', fontWeight: '500', marginBottom: '0.25rem' }}>
+                  Pathfinding Algorithm
                 </label>
-                <select 
+                <select
                   id="algorithm"
-                  value={algorithm} 
+                  value={algorithm}
                   onChange={(e) => setAlgorithm(e.target.value as Algorithm)}
-                  style={{ 
-                    padding: '0.5rem', 
-                    width: '100%',
-                    borderRadius: '4px',
-                    border: '1px solid #34495e',
-                    backgroundColor: '#34495e',
-                    color: 'white'
-                  }}
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', backgroundColor: '#374151', border: '1px solid #4B5563', color: 'white' }}
                 >
                   <option value="bfs">BFS (Breadth-First Search)</option>
                   <option value="dfs">DFS (Depth-First Search)</option>
                   <option value="astar">A* (A-Star)</option>
-                  <option value="dijkstra">Dijkstra's Algorithm</option>
+                  <option value="dijkstra">Dijkstra</option>
                 </select>
               </div>
-              
-              {/* A* Score Visualization Toggle */}
-              {solution?.algorithm === 'A*' && (
-                <div>
-                  <label style={{ 
-                    display: 'flex', 
-                    alignItems: 'center',
-                    gap: '0.5rem',
-                    color: '#bdc3c7',
-                    fontSize: '0.9rem',
-                    cursor: 'pointer'
-                  }}>
-                    <input 
-                      type="checkbox"
-                      checked={showAStarScores}
-                      onChange={(e) => setShowAStarScores(e.target.checked)}
-                      style={{ 
-                        transform: 'scale(1.2)',
-                        accentColor: '#3498db'
-                      }}
-                    />
-                    ⭐ Show A* Scores (f, g, h)
-                  </label>
-                </div>
-              )}
-              
-              <button 
-                onClick={generateNewMaze}
+            </div>
+
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginTop: '1.5rem', marginBottom: '1rem' }}>Visualization</h2>
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+                <button
+                    onClick={generateNewMaze}
+                    style={{ width: '100%', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontWeight: '600', backgroundColor: '#059669', color: 'white', border: 'none', cursor: 'pointer' }}
+                >
+                    New Maze
+                </button>
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+              <button
+                onClick={visualizeSolving}
                 style={{ 
-                  padding: '0.75rem 1rem', 
-                  backgroundColor: '#e74c3c', 
+                  width: '100%', 
+                  padding: '0.5rem 1rem', 
+                  borderRadius: '0.375rem', 
+                  fontWeight: '600', 
+                  backgroundColor: isVisualizing && !isPaused ? '#DC2626' : '#4F46E5', 
                   color: 'white', 
                   border: 'none', 
-                  borderRadius: '6px',
                   cursor: 'pointer',
-                  fontSize: '1rem',
-                  fontWeight: 'bold',
-                  marginTop: '0.5rem',
-                  transition: 'background-color 0.2s'
+                  opacity: isVisualizing && isStepMode && !isPaused ? 0.5 : 1
                 }}
-                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#c0392b'}
-                onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#e74c3c'}
+                disabled={isVisualizing && isStepMode && !isPaused}
               >
-                🎲 Generate New Maze
+                {isVisualizing && !isPaused ? 'Stop Visualization' : 'Visualize Solve'}
               </button>
-              
-              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                <button 
-                  onClick={visualizeSolving}
-                  disabled={!solution}
-                  style={{ 
-                    flex: 1,
-                    padding: '0.75rem 1rem', 
-                    backgroundColor: isVisualizing ? '#e74c3c' : '#27ae60', 
-                    color: 'white', 
-                    border: 'none', 
-                    borderRadius: '6px',
-                    cursor: !solution ? 'not-allowed' : 'pointer',
-                    fontSize: '0.9rem',
-                    fontWeight: 'bold',
-                    transition: 'background-color 0.2s'
-                  }}
-                  onMouseOver={(e) => {
-                    if (solution) {
-                      e.currentTarget.style.backgroundColor = isVisualizing ? '#c0392b' : '#229954'
-                    }
-                  }}
-                  onMouseOut={(e) => {
-                    if (solution) {
-                      e.currentTarget.style.backgroundColor = isVisualizing ? '#e74c3c' : '#27ae60'
-                    }
-                  }}
-                >
-                  {isVisualizing ? '⏹️ Stop' : '🎯 Visualize Solve'}
-                </button>
-                
-                <button 
-                  onClick={resetVisualization}
-                  disabled={isVisualizing}
-                  style={{ 
-                    flex: 1,
-                    padding: '0.75rem 1rem', 
-                    backgroundColor: isVisualizing ? '#95a5a6' : '#f39c12', 
-                    color: 'white', 
-                    border: 'none', 
-                    borderRadius: '6px',
-                    cursor: isVisualizing ? 'not-allowed' : 'pointer',
-                    fontSize: '0.9rem',
-                    fontWeight: 'bold',
-                    transition: 'background-color 0.2s'
-                  }}
-                  onMouseOver={(e) => {
-                    if (!isVisualizing) {
-                      e.currentTarget.style.backgroundColor = '#e67e22'
-                    }
-                  }}
-                  onMouseOut={(e) => {
-                    if (!isVisualizing) {
-                      e.currentTarget.style.backgroundColor = '#f39c12'
-                    }
-                  }}
-                >
-                  🔄 Reset
-                </button>
-              </div>
+              <button
+                onClick={resetVisualization}
+                style={{ width: '100%', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontWeight: '600', backgroundColor: '#4B5563', color: 'white', border: 'none', cursor: 'pointer' }}
+              >
+                Reset
+              </button>
             </div>
-          </div>
-          
-          {/* Algorithm Log Window */}
-          <div style={{ 
-            padding: '1rem', 
-            backgroundColor: '#1a252f',
-            color: '#ecf0f1',
-            borderRadius: '8px',
-            width: Math.max(250, Math.min(320, mazeSize * 12)) + 'px',
-            height: '300px',
-            fontFamily: 'Consolas, Monaco, "Courier New", monospace',
-            fontSize: '0.8rem',
-            border: '1px solid #34495e'
-          }}>
-            <h4 style={{ 
-              margin: '0 0 0.75rem 0', 
-              fontSize: '1rem', 
-              color: '#3498db',
-              borderBottom: '1px solid #34495e',
-              paddingBottom: '0.5rem'
-            }}>
-              🔍 Algorithm Log
-            </h4>
-            
-            <div style={{ 
-              height: '240px', 
-              overflowY: 'auto',
-              scrollBehavior: 'smooth'
-            }}
-            ref={logContainerRef}
-            >
-              {algorithmLogs.length === 0 ? (
-                <div style={{ 
-                  color: '#7f8c8d', 
-                  fontStyle: 'italic',
-                  textAlign: 'center',
-                  padding: '2rem 0'
-                }}>
-                  Click "Visualize Solve" to see algorithm logs...
-                </div>
-              ) : (
-                algorithmLogs.map((log, index) => (
-                  <div 
-                    key={index} 
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
+              <input
+                type="checkbox"
+                id="stepMode"
+                checked={isStepMode}
+                onChange={(e) => setIsStepMode(e.target.checked)}
+                style={{ width: '1.25rem', height: '1.25rem' }}
+              />
+              <label htmlFor="stepMode" style={{ fontSize: '0.875rem' }}>Step-by-Step Mode</label>
+            </div>
+
+            {isStepMode && (
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+                <button
+                    onClick={() => handleStepChange(-1)}
+                    disabled={!isVisualizing || currentStep <= 0}
                     style={{ 
-                      marginBottom: '0.25rem',
-                      padding: '0.25rem 0',
-                      borderLeft: log.includes('🚀') ? '3px solid #e74c3c' :
-                                 log.includes('✅') ? '3px solid #27ae60' :
-                                 log.includes('🎉') ? '3px solid #f39c12' :
-                                 '3px solid transparent',
-                      paddingLeft: '0.5rem',
-                      lineHeight: '1.3'
+                      width: '100%', 
+                      padding: '0.5rem 1rem', 
+                      borderRadius: '0.375rem', 
+                      fontWeight: '600', 
+                      backgroundColor: '#4B5563', 
+                      color: 'white', 
+                      border: 'none', 
+                      cursor: 'pointer',
+                      opacity: (!isVisualizing || currentStep <= 0) ? 0.5 : 1
                     }}
-                  >
-                    {(() => {
-                      const colonIndex = log.indexOf(': ')
-                      if (colonIndex !== -1) {
-                        const timestamp = log.substring(0, colonIndex)
-                        const message = log.substring(colonIndex + 2)
-                        return (
-                          <>
-                            <span style={{ fontSize: '0.7rem', color: '#7f8c8d', opacity: 0.8 }}>
-                              {timestamp}
-                            </span>
-                            <span style={{ fontWeight: 'bold', marginLeft: '0.5rem' }}>
-                              {message}
-                            </span>
-                          </>
-                        )
-                      }
-                      return <span style={{ fontWeight: 'bold' }}>{log}</span>
-                    })()}
-                  </div>
-                ))
-              )}
+                >
+                    Prev
+                </button>
+                <button
+                    onClick={handlePauseToggle}
+                    disabled={!isVisualizing}
+                    style={{ 
+                      width: '100%', 
+                      padding: '0.5rem 1rem', 
+                      borderRadius: '0.375rem', 
+                      fontWeight: '600', 
+                      backgroundColor: '#D97706', 
+                      color: 'white', 
+                      border: 'none', 
+                      cursor: 'pointer',
+                      opacity: !isVisualizing ? 0.5 : 1
+                    }}
+                >
+                    {isPaused ? 'Play' : 'Pause'}
+                </button>
+                <button
+                    onClick={() => handleStepChange(1)}
+                    disabled={!isVisualizing || !solution?.visitedCells || currentStep >= solution.visitedCells.length - 1}
+                    style={{ 
+                      width: '100%', 
+                      padding: '0.5rem 1rem', 
+                      borderRadius: '0.375rem', 
+                      fontWeight: '600', 
+                      backgroundColor: '#4B5563', 
+                      color: 'white', 
+                      border: 'none', 
+                      cursor: 'pointer',
+                      opacity: (!isVisualizing || !solution?.visitedCells || currentStep >= solution.visitedCells.length - 1) ? 0.5 : 1
+                    }}
+                >
+                    Next
+                </button>
             </div>
-          </div>
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input
+                    type="checkbox"
+                    id="showAStarScores"
+                    checked={showAStarScores}
+                    onChange={(e) => setShowAStarScores(e.target.checked)}
+                    style={{ width: '1.25rem', height: '1.25rem' }}
+                    disabled={algorithm !== 'astar'}
+                />
+                <label htmlFor="showAStarScores" style={{ fontSize: '0.875rem', color: algorithm !== 'astar' ? '#6B7280' : 'white' }}>
+                    Show A* Scores
+                </label>
+            </div>
+        </div>
+
+        <div style={{ padding: '1.5rem', paddingTop: 0, flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1rem' }}>Algorithm Log</h2>
+            <div
+              ref={logContainerRef}
+              style={{ 
+                flex: 1, 
+                backgroundColor: 'rgba(17, 24, 39, 0.5)', 
+                borderRadius: '0.375rem', 
+                padding: '1rem', 
+                overflowY: 'auto', 
+                fontFamily: 'monospace', 
+                fontSize: '0.875rem' 
+              }}
+            >
+              {algorithmLogs.map((log, index) => (
+                <div key={index} style={{ whiteSpace: 'pre-wrap' }}>
+                  {log}
+                </div>
+              ))}
+            </div>
         </div>
       </div>
-      
-      <div style={{ marginBottom: '1rem' }}>
-        <p>
-          <strong>Algorithm:</strong> {solution?.algorithm || 'None'} | 
-          <strong> Optimal distance:</strong> {solution ? solution.distance : 'unreachable'} | 
-          <strong> Your moves:</strong> {moves}
-        </p>
-        {solution?.visitedCells && (
-          <p style={{ fontSize: '0.9rem', color: '#666' }}>
-            Cells explored by {solution.algorithm}: {solution.visitedCells.length}
-          </p>
-        )}
-      </div>
-
-      {reachedExit && <p style={{ color: 'green' }}>🎉 You escaped the grid!</p>}
     </div>
   )
 }

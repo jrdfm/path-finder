@@ -1,251 +1,174 @@
-import React, { useEffect, useRef } from 'react'
-import Phaser from 'phaser'
+import React, { useMemo } from 'react'
+import { Canvas } from '@react-three/fiber'
+import { Box, OrbitControls } from '@react-three/drei'
+import * as THREE from 'three'
 import type { Level, Pos } from '../game/solver'
 
 interface Props {
   level: Level
   player: Pos
-  cell?: number // pixel size per cell, default 40
-  visualizedCells?: Pos[] // Cells explored during algorithm visualization
-  optimalPath?: Pos[] // Optimal path to highlight
-  aStarScores?: {
-    gScores: number[][]
-    hScores: number[][]
-    fScores: number[][]
-  }
-  showAStarScores?: boolean
+  visualizedCells?: Pos[]
+  optimalPath?: Pos[]
 }
 
-export default function MazeThree({ level, player, cell = 40, visualizedCells = [], optimalPath, aStarScores, showAStarScores = false }: Props) {
-  const gameRef = useRef<HTMLDivElement>(null)
-  const phaserGameRef = useRef<Phaser.Game | null>(null)
-  const playerSpriteRef = useRef<Phaser.GameObjects.Graphics | null>(null)
-  const visualizationGraphicsRef = useRef<Phaser.GameObjects.Graphics | null>(null)
+const WALL_HEIGHT = 1;
+const WALL_THICKNESS = 0.2;
 
-  useEffect(() => {
-    if (!gameRef.current) return
+function MazeLayout({ level }: { level: Level }) {
+    const { walls, floor } = useMemo(() => {
+        const wallInstances: THREE.Matrix4[] = [];
+        if (!level.cells) return { walls: [], floor: null };
 
-    const config: Phaser.Types.Core.GameConfig = {
-      type: Phaser.AUTO,
-      width: level.grid[0].length * cell,
-      height: level.grid.length * cell,
-      parent: gameRef.current,
-      backgroundColor: '#ffffff',
-      scene: {
-        create: function() {
-          const scene = this as Phaser.Scene
-          
-          // Draw maze walls as proper line segments
-          const graphics = scene.add.graphics()
-          graphics.lineStyle(4, 0x000000)
+        const rows = level.cells.length;
+        const cols = level.cells[0].length;
 
-          // Use pymaze-style wall rendering if cell data is available
-          if (level.cells) {
-            for (let r = 0; r < level.cells.length; r++) {
-              for (let c = 0; c < level.cells[0].length; c++) {
-                const x = c * cell
-                const y = r * cell
-                const cellWalls = level.cells[r][c].walls
-                
-                // Draw walls exactly like pymaze does
-                if (cellWalls.top) {
-                  graphics.moveTo(x, y)
-                  graphics.lineTo(x + cell, y)
-                  graphics.strokePath()
+        // Floor
+        const floorGeo = new THREE.PlaneGeometry(cols, rows);
+        const floorMatrix = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
+        floorGeo.applyMatrix4(floorMatrix);
+        const floorMesh = new THREE.Mesh(floorGeo, new THREE.MeshStandardMaterial({ color: 'lightgray' }));
+
+        // Walls
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const cell = level.cells[r][c];
+                const x = c - cols / 2 + 0.5;
+                const z = r - rows / 2 + 0.5;
+
+                if (cell.walls.top) {
+                    const matrix = new THREE.Matrix4().compose(
+                        new THREE.Vector3(x, WALL_HEIGHT / 2, z - 0.5),
+                        new THREE.Quaternion(),
+                        new THREE.Vector3(1, WALL_HEIGHT, WALL_THICKNESS)
+                    );
+                    wallInstances.push(matrix);
                 }
-                if (cellWalls.right) {
-                  graphics.moveTo(x + cell, y)
-                  graphics.lineTo(x + cell, y + cell)
-                  graphics.strokePath()
+                if (cell.walls.bottom) {
+                     const matrix = new THREE.Matrix4().compose(
+                        new THREE.Vector3(x, WALL_HEIGHT / 2, z + 0.5),
+                        new THREE.Quaternion(),
+                        new THREE.Vector3(1, WALL_HEIGHT, WALL_THICKNESS)
+                    );
+                    wallInstances.push(matrix);
                 }
-                if (cellWalls.bottom) {
-                  graphics.moveTo(x + cell, y + cell)
-                  graphics.lineTo(x, y + cell)
-                  graphics.strokePath()
+                if (cell.walls.left) {
+                    const matrix = new THREE.Matrix4().compose(
+                        new THREE.Vector3(x - 0.5, WALL_HEIGHT / 2, z),
+                        new THREE.Quaternion(),
+                        new THREE.Vector3(WALL_THICKNESS, WALL_HEIGHT, 1)
+                    );
+                    wallInstances.push(matrix);
                 }
-                if (cellWalls.left) {
-                  graphics.moveTo(x, y + cell)
-                  graphics.lineTo(x, y)
-                  graphics.strokePath()
+                if (cell.walls.right) {
+                    const matrix = new THREE.Matrix4().compose(
+                        new THREE.Vector3(x + 0.5, WALL_HEIGHT / 2, z),
+                        new THREE.Quaternion(),
+                        new THREE.Vector3(WALL_THICKNESS, WALL_HEIGHT, 1)
+                    );
+                    wallInstances.push(matrix);
                 }
-              }
             }
-          } else {
-            // Fallback to old rendering method
-            for (let r = 0; r < level.grid.length; r++) {
-              for (let c = 0; c < level.grid[0].length; c++) {
-                if (level.grid[r][c] === 1) {
-                  const x = c * cell
-                  const y = r * cell
-                  graphics.fillStyle(0x000000)
-                  graphics.fillRect(x, y, cell, cell)
-                }
-              }
-            }
-          }
-          
-          // Create player sprite
-          const playerSprite = scene.add.graphics()
-          playerSprite.fillStyle(0xff0000)
-          playerSprite.fillCircle(0, 0, Math.min(cell / 3, 12))
-          playerSprite.x = player.c * cell + cell / 2
-          playerSprite.y = player.r * cell + cell / 2
-          
-          playerSpriteRef.current = playerSprite
-          
-          // Create visualization graphics layer
-          const visualizationGraphics = scene.add.graphics()
-          visualizationGraphicsRef.current = visualizationGraphics
-          
-          // Mark the exit with a red "EXIT" sign
-          if (level.cells) {
-            const exitGraphics = scene.add.graphics()
-            exitGraphics.lineStyle(6, 0xff0000) // Thick red line
-            
-            for (let r = 0; r < level.cells.length; r++) {
-              for (let c = 0; c < level.cells[0].length; c++) {
-                const cellWalls = level.cells[r][c].walls
-                const x = c * cell
-                const y = r * cell
-                
-                // Check if this cell has an opening to the outside
-                if (r === 0 && !cellWalls.top) {
-                  // Draw red line at top edge of cell
-                  exitGraphics.moveTo(x, y)
-                  exitGraphics.lineTo(x + cell, y)
-                  exitGraphics.strokePath()
-                } else if (r === level.cells.length - 1 && !cellWalls.bottom) {
-                  // Draw red line at bottom edge of cell
-                  exitGraphics.moveTo(x, y + cell)
-                  exitGraphics.lineTo(x + cell, y + cell)
-                  exitGraphics.strokePath()
-                } else if (c === 0 && !cellWalls.left) {
-                  // Draw red line at left edge of cell
-                  exitGraphics.moveTo(x, y)
-                  exitGraphics.lineTo(x, y + cell)
-                  exitGraphics.strokePath()
-                } else if (c === level.cells[0].length - 1 && !cellWalls.right) {
-                  // Draw red line at right edge of cell
-                  exitGraphics.moveTo(x + cell, y)
-                  exitGraphics.lineTo(x + cell, y + cell)
-                  exitGraphics.strokePath()
-                }
-              }
-            }
-          }
         }
-      }
-    }
+        return { walls: wallInstances, floor: floorMesh };
+    }, [level]);
 
-    phaserGameRef.current = new Phaser.Game(config)
+    return (
+        <group>
+            {floor && <primitive object={floor} />}
+            <instancedMesh args={[undefined, undefined, walls.length]} castShadow receiveShadow>
+                <boxGeometry args={[1, 1, 1]} />
+                <meshStandardMaterial color="blue" />
+                {walls.map((matrix, i) => (
+                    <object3D key={i} matrix={matrix} />
+                ))}
+            </instancedMesh>
+        </group>
+    );
+}
 
-    return () => {
-      if (phaserGameRef.current) {
-        phaserGameRef.current.destroy(true)
-        phaserGameRef.current = null
-      }
-    }
-  }, [level, cell])
+function Player({ player, level }: { player: Pos, level: Level }) {
+    const { width, height } = useMemo(() => ({
+        width: level.grid[0].length,
+        height: level.grid.length
+    }), [level]);
+    const position = useMemo(() => new THREE.Vector3(
+        player.c - width / 2 + 0.5,
+        0.5,
+        player.r - height / 2 + 0.5
+    ), [player, width, height]);
 
-  // Update player position
-  useEffect(() => {
-    if (playerSpriteRef.current) {
-      playerSpriteRef.current.x = player.c * cell + cell / 2
-      playerSpriteRef.current.y = player.r * cell + cell / 2
-    }
-  }, [player, cell])
+    return (
+        <mesh position={position}>
+            <sphereGeometry args={[0.3, 32, 32]} />
+            <meshStandardMaterial color="red" />
+        </mesh>
+    );
+}
 
-  // Update visualization
-  useEffect(() => {
-    if (!visualizationGraphicsRef.current) return
-    
-    // Use requestAnimationFrame to batch updates for better performance
-    const updateVisualization = () => {
-      const graphics = visualizationGraphicsRef.current!
-      const scene = graphics.scene
-      graphics.clear()
-      
-      // Clear existing text objects
-      scene.children.list.forEach(child => {
-        if (child.type === 'Text' && (child as any).isAStarScore) {
-          child.destroy()
-        }
-      })
-      
-      // Draw explored cells (light blue)
-      graphics.fillStyle(0x3498db, 0.3) // Light blue with transparency
-      visualizedCells.forEach(pos => {
-        const x = pos.c * cell + 2
-        const y = pos.r * cell + 2
-        graphics.fillRect(x, y, cell - 4, cell - 4)
-      })
-      
-      // Draw optimal path (green)
-      if (optimalPath) {
-        graphics.fillStyle(0x27ae60, 0.6) // Green with transparency
-        optimalPath.forEach(pos => {
-          const x = pos.c * cell + 4
-          const y = pos.r * cell + 4
-          graphics.fillRect(x, y, cell - 8, cell - 8)
-        })
-      }
-      
-      // Draw A* scores if enabled and available
-      if (showAStarScores && aStarScores) {
-        const fontSize = Math.max(6, Math.min(cell / 8, 10))
-        
-        // Only show scores for explored cells to reduce rendering load
-        const exploredPositions = new Set(visualizedCells.map(pos => `${pos.r},${pos.c}`))
-        
-        // Limit the number of score displays for performance (show only recent ones)
-        const maxScoreDisplays = Math.min(50, visualizedCells.length)
-        const recentCells = visualizedCells.slice(-maxScoreDisplays)
-        const recentPositions = new Set(recentCells.map(pos => `${pos.r},${pos.c}`))
-        
-        for (let r = 0; r < aStarScores.fScores.length; r++) {
-          for (let c = 0; c < aStarScores.fScores[0].length; c++) {
-            const fScore = aStarScores.fScores[r][c]
-            const gScore = aStarScores.gScores[r][c]
-            const hScore = aStarScores.hScores[r][c]
-            
-            // Only show scores for recent cells to maintain performance
-            if (fScore !== Infinity && recentPositions.has(`${r},${c}`)) {
-              const x = c * cell + 2
-              const y = r * cell + 2
-              
-              // Create more compact text objects for f, g, h scores
-              const fText = scene.add.text(x + 1, y + 1, `f${fScore}`, {
-                fontSize: `${fontSize}px`,
-                color: '#000000',
-                backgroundColor: '#ffffff90',
-                padding: { x: 0, y: 0 }
-              })
-              ;(fText as any).isAStarScore = true
-              
-              const gText = scene.add.text(x + 1, y + fontSize + 2, `g${gScore}`, {
-                fontSize: `${fontSize}px`,
-                color: '#0066cc',
-                backgroundColor: '#ffffff90',
-                padding: { x: 0, y: 0 }
-              })
-              ;(gText as any).isAStarScore = true
-              
-              const hText = scene.add.text(x + 1, y + (fontSize * 2) + 3, `h${hScore}`, {
-                fontSize: `${fontSize}px`,
-                color: '#cc6600',
-                backgroundColor: '#ffffff90',
-                padding: { x: 0, y: 0 }
-              })
-              ;(hText as any).isAStarScore = true
-            }
-          }
-        }
-      }
-    }
-    
-    const animationId = requestAnimationFrame(updateVisualization)
-    return () => cancelAnimationFrame(animationId)
-  }, [visualizedCells, optimalPath, cell, showAStarScores, aStarScores])
+function Path({ visualizedCells, optimalPath, level }: { visualizedCells: Pos[], optimalPath: Pos[], level: Level }) {
+    const { width, height } = useMemo(() => ({
+        width: level.grid[0].length,
+        height: level.grid.length,
+    }), [level]);
 
-  return <div ref={gameRef} style={{ border: '1px solid #ccc', display: 'inline-block' }} />
+    const visualizedMatrices = useMemo(() => {
+        return visualizedCells.map(pos => {
+            const position = new THREE.Vector3(
+                pos.c - width / 2 + 0.5,
+                0.1,
+                pos.r - height / 2 + 0.5
+            );
+            return new THREE.Matrix4().compose(position, new THREE.Quaternion(), new THREE.Vector3(1, 1, 1));
+        });
+    }, [visualizedCells, width, height]);
+
+    const optimalPathMatrices = useMemo(() => {
+        return optimalPath.map(pos => {
+            const position = new THREE.Vector3(
+                pos.c - width / 2 + 0.5,
+                0.2, // Slightly higher to be visible over the visualized path
+                pos.r - height / 2 + 0.5
+            );
+            return new THREE.Matrix4().compose(position, new THREE.Quaternion(), new THREE.Vector3(1, 1, 1));
+        });
+    }, [optimalPath, width, height]);
+
+    return (
+        <group>
+            <instancedMesh args={[undefined, undefined, visualizedMatrices.length]}>
+                <sphereGeometry args={[0.15, 16, 16]} />
+                <meshStandardMaterial color="blue" transparent opacity={0.5} />
+                {visualizedMatrices.map((matrix, i) => (
+                    <object3D key={i} matrix={matrix} />
+                ))}
+            </instancedMesh>
+            <instancedMesh args={[undefined, undefined, optimalPathMatrices.length]}>
+                <sphereGeometry args={[0.2, 16, 16]} />
+                <meshStandardMaterial color="green" />
+                {optimalPathMatrices.map((matrix, i) => (
+                    <object3D key={i} matrix={matrix} />
+                ))}
+            </instancedMesh>
+        </group>
+    );
+}
+
+export default function MazeThree({ level, player, visualizedCells = [], optimalPath = [] }: Props) {
+  const { width, height } = useMemo(() => ({
+      width: level.grid[0].length,
+      height: level.grid.length
+  }), [level]);
+
+  return (
+    <div style={{ width: '100%', height: '100%', border: '1px solid #ccc' }}>
+        <Canvas camera={{ position: [width / 2, Math.max(width, height), height / 2], fov: 60 }}>
+            <ambientLight intensity={0.8} />
+            <pointLight position={[width, 10, height]} intensity={1} />
+            <OrbitControls target={[0, 0, 0]}/>
+            <MazeLayout level={level} />
+            <Player player={player} level={level}/>
+            <Path visualizedCells={visualizedCells} optimalPath={optimalPath} level={level} />
+        </Canvas>
+    </div>
+  )
 } 
